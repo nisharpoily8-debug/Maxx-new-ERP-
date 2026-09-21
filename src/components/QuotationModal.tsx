@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { SalesQuotation, SalesInvoice } from '../types/erp.ts';
 import { useErp } from '../context/ErpContext.tsx';
 import { api } from '../services/api.ts';
@@ -32,6 +32,16 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
   const { settings, formatAED, formatUAE, showToast } = useErp();
   const [isConvertingOrder, setIsConvertingOrder] = useState(false);
   const [isConvertingInvoice, setIsConvertingInvoice] = useState(false);
+  const [scaleMode, setScaleMode] = useState<'normal' | 'compact' | 'fit'>('compact');
+
+  // Close on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   if (!quotation) return null;
 
@@ -85,20 +95,43 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 print:p-0 print:bg-white">
-      <div className="relative w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200 print:shadow-none print:border-none print:max-w-none">
-        {/* Modal Toolbar (hidden when printing) */}
-        <div className="flex items-center justify-between px-6 py-4 bg-slate-900 text-white border-b border-slate-800 print:hidden">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-lg">
-              <FileText className="w-5 h-5" />
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white"
+    >
+      {/* Floating Quick Close Button */}
+      <button
+        onClick={onClose}
+        className="fixed top-3 right-4 z-[70] bg-slate-900/90 text-white hover:bg-rose-600 shadow-xl rounded-full px-3 py-1.5 flex items-center gap-1.5 text-xs font-bold transition border border-slate-700 hover:border-rose-500 cursor-pointer print:hidden"
+        title="Close quotation preview (Esc)"
+      >
+        <X className="w-4 h-4" />
+        <span className="hidden sm:inline">Close (Esc)</span>
+      </button>
+
+      <div
+        className={`relative w-full ${
+          scaleMode === 'fit'
+            ? 'max-w-xl'
+            : scaleMode === 'compact'
+            ? 'max-w-2xl lg:max-w-3xl'
+            : 'max-w-3xl'
+        } bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200 print:shadow-none print:border-none print:max-w-none my-4`}
+      >
+        {/* Sticky Modal Toolbar (hidden when printing) */}
+        <div className="sticky top-0 z-30 flex items-center justify-between px-4 py-3 bg-slate-900 text-white border-b border-slate-800 shadow-md print:hidden">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="p-1.5 bg-emerald-500/20 text-emerald-400 rounded-lg shrink-0">
+              <FileText className="w-4 h-4" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <span className="font-mono font-bold text-sm text-emerald-400">
+                <span className="font-mono font-bold text-sm sm:text-base text-emerald-400 truncate">
                   {quotation.quoteNumber}
                 </span>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                <span className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${
                   quotation.status === 'Converted'
                     ? 'bg-blue-900/80 text-blue-300 border border-blue-700'
                     : quotation.status === 'Approved'
@@ -108,31 +141,65 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                   {quotation.status}
                 </span>
               </div>
-              <p className="text-xs text-slate-400">{quotation.customerName}</p>
+              <p className="text-[11px] text-slate-400 hidden sm:block truncate">{quotation.customerName}</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* Sizing Toggles */}
+            <div className="hidden sm:flex items-center bg-slate-800 rounded-lg p-0.5 border border-slate-700 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setScaleMode('fit')}
+                className={`px-2 py-0.5 rounded font-medium transition ${
+                  scaleMode === 'fit' ? 'bg-slate-700 text-white font-bold' : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Fit to screen (Compact)"
+              >
+                Fit
+              </button>
+              <button
+                type="button"
+                onClick={() => setScaleMode('compact')}
+                className={`px-2 py-0.5 rounded font-medium transition ${
+                  scaleMode === 'compact' ? 'bg-slate-700 text-white font-bold' : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Default Compact Width"
+              >
+                Compact
+              </button>
+              <button
+                type="button"
+                onClick={() => setScaleMode('normal')}
+                className={`px-2 py-0.5 rounded font-medium transition ${
+                  scaleMode === 'normal' ? 'bg-slate-700 text-white font-bold' : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Full Size"
+              >
+                100%
+              </button>
+            </div>
+
             {quotation.status !== 'Converted' && (
               <>
                 <button
                   id="btn-convert-quote-order"
                   onClick={handleConvertToOrder}
                   disabled={isConvertingOrder}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg transition border border-slate-700 disabled:opacity-50"
+                  className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg transition border border-slate-700 disabled:opacity-50"
                 >
                   <ShoppingCart className="w-3.5 h-3.5" />
-                  <span>{isConvertingOrder ? 'Converting...' : 'Convert to Order'}</span>
+                  <span className="hidden md:inline">{isConvertingOrder ? 'Converting...' : 'To Order'}</span>
                 </button>
 
                 <button
                   id="btn-convert-quote-invoice"
                   onClick={handleConvertToInvoice}
                   disabled={isConvertingInvoice}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold rounded-lg transition shadow-xs disabled:opacity-50"
+                  className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold rounded-lg transition shadow-xs disabled:opacity-50"
                 >
                   <ArrowRight className="w-3.5 h-3.5" />
-                  <span>{isConvertingInvoice ? 'Generating Invoice...' : 'Generate Tax Invoice'}</span>
+                  <span className="hidden md:inline">{isConvertingInvoice ? 'Generating...' : 'To Invoice'}</span>
                 </button>
               </>
             )}
@@ -140,33 +207,41 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
             <button
               id="btn-whatsapp-quote-share"
               onClick={handleWhatsAppShare}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700/60 hover:bg-emerald-600 text-white text-xs font-medium rounded-lg transition"
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-700/60 hover:bg-emerald-600 text-white text-xs font-medium rounded-lg transition"
               title="Share quotation via WhatsApp"
             >
-              <Share2 className="w-4 h-4" />
-              <span className="hidden sm:inline">WhatsApp</span>
+              <Share2 className="w-3.5 h-3.5" />
+              <span className="hidden lg:inline">WhatsApp</span>
             </button>
 
             <button
               id="btn-print-quotation"
               onClick={handlePrint}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-medium rounded-lg transition border border-slate-700"
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-medium rounded-lg transition border border-slate-700"
             >
-              <Printer className="w-4 h-4" />
-              <span>Print / PDF</span>
+              <Printer className="w-3.5 h-3.5" />
+              <span>Print</span>
             </button>
 
+            {/* Prominent Close Button */}
             <button
               onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+              className="flex items-center gap-1 px-3 py-1.5 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white rounded-lg text-xs font-bold transition border border-rose-500/40 cursor-pointer"
+              title="Close quotation preview (Esc)"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
+              <span>Close</span>
             </button>
           </div>
         </div>
 
         {/* PRINTABLE QUOTATION CONTENT */}
-        <div className="p-8 sm:p-12 text-slate-900 bg-white" id="printable-quotation">
+        <div
+          className={`p-5 sm:p-7 print:p-6 text-slate-900 bg-white transition-all ${
+            scaleMode === 'fit' ? 'text-[11px]' : 'text-xs'
+          }`}
+          id="printable-quotation"
+        >
           {/* Header & Company Logo */}
           <div className="flex flex-col sm:flex-row justify-between items-start gap-6 border-b-2 border-slate-900 pb-6">
             <div>
@@ -384,6 +459,29 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
               <p className="font-bold text-slate-900">Customer Confirmation & Acceptance</p>
               <p className="text-[11px] text-slate-500">Sign & Stamp to confirm order acceptance</p>
             </div>
+          </div>
+        </div>
+
+        {/* Bottom Actions Bar (Always makes closing easy at the end of the document) */}
+        <div className="flex items-center justify-between p-3.5 bg-slate-100 border-t border-slate-200 print:hidden text-xs">
+          <span className="text-slate-500 font-medium">
+            Maxpack Commercial Quotation • {quotation.quoteNumber}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="px-3.5 py-1.5 bg-white hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-lg font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Close Document</span>
+            </button>
+            <button
+              onClick={handlePrint}
+              className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-bold transition flex items-center gap-1.5 shadow-xs"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>Print / PDF</span>
+            </button>
           </div>
         </div>
       </div>

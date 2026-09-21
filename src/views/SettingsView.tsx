@@ -26,6 +26,13 @@ import {
   Sparkles,
   Check,
   Eye,
+  EyeOff,
+  Lock,
+  ShieldAlert,
+  Key,
+  FileText,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 interface SettingsViewProps {
@@ -63,8 +70,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenSheetsGuide })
   const [showClearDemoModal, setShowClearDemoModal] = useState(false);
   const [isClearingDemo, setIsClearingDemo] = useState(false);
 
+  // Super Admin Data Erasure with Master Password
+  const [showSuperAdminEraseModal, setShowSuperAdminEraseModal] = useState(false);
+  const [adminPasswordInput, setAdminPasswordInput] = useState('');
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
+  const [adminResetMode, setAdminResetMode] = useState<'transactions_only' | 'factory_reset'>('transactions_only');
+  const [adminConfirmationText, setAdminConfirmationText] = useState('');
+  const [isErasingData, setIsErasingData] = useState(false);
+
   const [sheetsStatus, setSheetsStatus] = useState<any>(null);
   const [spreadsheetInput, setSpreadsheetInput] = useState('');
+  const [clientEmailInput, setClientEmailInput] = useState('');
+  const [privateKeyInput, setPrivateKeyInput] = useState('');
+  const [jsonKeyInput, setJsonKeyInput] = useState('');
+  const [showAdvancedCredentials, setShowAdvancedCredentials] = useState(false);
+  const [isSavingCredentials, setIsSavingCredentials] = useState(false);
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
   const [testingConnection, setTestingConnection] = useState(false);
   const [syncingAll, setSyncingAll] = useState(false);
@@ -130,6 +150,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenSheetsGuide })
     }
   };
 
+  const handleSuperAdminEraseData = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminPasswordInput.trim()) {
+      showToast('Super Admin Master Password is required.', 'error');
+      return;
+    }
+    if (adminConfirmationText.trim() !== 'CONFIRM ERASE') {
+      showToast('Please type "CONFIRM ERASE" exactly in the confirmation field.', 'error');
+      return;
+    }
+
+    setIsErasingData(true);
+    try {
+      const res = await api.eraseAllDataWithPassword({
+        password: adminPasswordInput.trim(),
+        resetMode: adminResetMode,
+        confirmationText: adminConfirmationText.trim(),
+      });
+      showToast(res.message || 'Super Admin data erasure completed successfully!', 'success');
+      setShowSuperAdminEraseModal(false);
+      setAdminPasswordInput('');
+      setAdminConfirmationText('');
+      await refreshSettings();
+      await loadStatus();
+    } catch (err: any) {
+      showToast(err.message || 'Data erasure authorization failed. Check your password.', 'error');
+    } finally {
+      setIsErasingData(false);
+    }
+  };
+
   const loadStatus = async () => {
     try {
       const res = await api.getSheetsStatus();
@@ -137,8 +188,53 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenSheetsGuide })
       if (res.spreadsheetId) {
         setSpreadsheetInput(res.spreadsheetId);
       }
+      if (res.serviceAccountEmail && !clientEmailInput) {
+        setClientEmailInput(res.serviceAccountEmail);
+      }
     } catch (e: any) {
       console.error(e);
+    }
+  };
+
+  const handleJsonFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = reader.result as string;
+        const parsed = JSON.parse(text);
+        if (parsed.client_email) setClientEmailInput(parsed.client_email);
+        if (parsed.private_key) setPrivateKeyInput(parsed.private_key);
+        setJsonKeyInput(text);
+        showToast('Google Cloud Service Account JSON loaded successfully! Click Save to apply.', 'success');
+      } catch (err: any) {
+        showToast('Invalid JSON file format. Please upload a valid service-account.json file.', 'error');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleSaveFullSheetsCredentials = async () => {
+    setIsSavingCredentials(true);
+    try {
+      const res = await api.updateSheetsCredentials({
+        spreadsheetId: spreadsheetInput.trim(),
+        clientEmail: clientEmailInput.trim() || undefined,
+        privateKey: privateKeyInput.trim() || undefined,
+        jsonKey: jsonKeyInput.trim() || undefined,
+      });
+      if (res.success) {
+        showToast('Google Sheets credentials and configuration saved and persisted successfully!', 'success');
+        setJsonKeyInput('');
+        await loadStatus();
+      } else {
+        showToast('Failed to save credentials.', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Failed to update credentials', 'error');
+    } finally {
+      setIsSavingCredentials(false);
     }
   };
 
@@ -195,11 +291,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenSheetsGuide })
 
   const handleSaveSheetsConfig = async () => {
     try {
+      // If user entered service account details, persist them
+      if (clientEmailInput || privateKeyInput || jsonKeyInput || spreadsheetInput) {
+        await api.updateSheetsCredentials({
+          spreadsheetId: spreadsheetInput.trim(),
+          clientEmail: clientEmailInput.trim() || undefined,
+          privateKey: privateKeyInput.trim() || undefined,
+          jsonKey: jsonKeyInput.trim() || undefined,
+        });
+      }
+
       await api.updateSettings({
         googleSheets: {
           ...(settings?.googleSheets || {}),
           spreadsheetId: spreadsheetInput.trim(),
-          serviceAccountEmail: sheetsStatus?.serviceAccountEmail || '',
+          serviceAccountEmail: clientEmailInput.trim() || sheetsStatus?.serviceAccountEmail || '',
           autoSync: autoSyncEnabled,
           status: sheetsStatus?.configured ? 'Connected' : 'Not Configured',
           lastSyncTime: new Date().toISOString(),
@@ -629,18 +735,19 @@ CREATE TABLE sales_invoices (
             </div>
           </form>
 
-          {/* Clean Database / Purge Demo Data Card */}
-          <div className="p-6 bg-white rounded-2xl border border-rose-200 shadow-xs text-xs space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          {/* Clean Database & Super Admin Power Section */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Quick Demo Data Cleanup */}
+            <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-xs text-xs space-y-3 flex flex-col justify-between">
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-rose-100 text-rose-800 border border-rose-200">
-                    Database Cleanup
+                  <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-slate-100 text-slate-700 border border-slate-200">
+                    Sample Data
                   </span>
-                  <h3 className="font-bold text-slate-900 text-sm">Purge Demo Data & Start Fresh</h3>
+                  <h3 className="font-bold text-slate-900 text-sm">Purge Demo Data</h3>
                 </div>
-                <p className="text-slate-600 text-[11px] mt-1 max-w-xl">
-                  Ready to run your real packaging business? Click below to delete sample products, sample customers, suppliers, quotations, orders, and invoices. Your company profile, VAT settings, connected Google Sheet, and Chart of Accounts are securely kept intact.
+                <p className="text-slate-600 text-[11px] mt-2">
+                  Quickly remove preloaded demo sample products, invoices, and quotations to test with fresh data.
                 </p>
               </div>
 
@@ -648,12 +755,202 @@ CREATE TABLE sales_invoices (
                 type="button"
                 id="btn-purge-demo-data"
                 onClick={() => setShowClearDemoModal(true)}
-                className="flex items-center gap-1.5 px-4 py-2.5 bg-rose-700 hover:bg-rose-600 text-white font-bold rounded-xl shadow-xs transition whitespace-nowrap self-start sm:self-center"
+                className="flex items-center justify-center gap-1.5 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl shadow-xs transition w-full"
               >
-                <Trash2 className="w-4 h-4" />
-                <span>Clear Demo Data</span>
+                <Trash2 className="w-3.5 h-3.5 text-slate-600" />
+                <span>Clear Demo Records</span>
               </button>
             </div>
+
+            {/* SUPER ADMIN POWER OPTION: ERASE DATA WITH PASSWORD */}
+            <div className="p-5 bg-linear-to-br from-rose-50 to-red-50/70 rounded-2xl border-2 border-rose-200 shadow-xs text-xs space-y-3 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-rose-700 text-white shadow-xs">
+                      Super Admin Power
+                    </span>
+                    <span className="flex items-center gap-1 text-[10px] text-rose-800 font-bold">
+                      <Lock className="w-3 h-3 text-rose-700" /> Password Required
+                    </span>
+                  </div>
+                </div>
+                <h3 className="font-black text-rose-950 text-sm mt-2 flex items-center gap-1.5">
+                  <ShieldAlert className="w-4 h-4 text-rose-700 shrink-0" />
+                  Erase Data with Master Password
+                </h3>
+                <p className="text-rose-900/90 text-[11px] mt-1.5 leading-relaxed">
+                  Enterprise-grade data purge protected by Super Admin credentials. Erase operational transactions (invoices, bills, stock) or perform a complete factory reset. Persists immediately to disk and mirrors to Google Sheets.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                id="btn-super-admin-erase"
+                onClick={() => setShowSuperAdminEraseModal(true)}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-700 hover:bg-rose-800 text-white font-bold rounded-xl shadow-md transition w-full"
+              >
+                <ShieldAlert className="w-4 h-4" />
+                <span>Super Admin: Erase Data with Password</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUPER ADMIN PASSWORD ERASE MODAL */}
+      {showSuperAdminEraseModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border-2 border-rose-300 space-y-5 text-slate-900">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-rose-100 text-rose-700 rounded-xl border border-rose-200 shadow-xs">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase bg-rose-700 text-white">
+                      Super Admin Authorization
+                    </span>
+                  </div>
+                  <h3 className="font-black text-base text-slate-900 mt-0.5">Erase ERP Data with Password</h3>
+                  <p className="text-[11px] text-slate-500">Authorized administrative reset & persistence</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowSuperAdminEraseModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSuperAdminEraseData} className="space-y-4 text-xs">
+              {/* Reset Mode Selection */}
+              <div>
+                <label className="block text-slate-800 font-bold mb-1.5">Select Erasure Scope:</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <label
+                    className={`p-3 rounded-xl border cursor-pointer flex flex-col justify-between transition ${
+                      adminResetMode === 'transactions_only'
+                        ? 'bg-rose-50/80 border-rose-300 ring-2 ring-rose-400/50'
+                        : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <input
+                        type="radio"
+                        name="adminResetMode"
+                        value="transactions_only"
+                        checked={adminResetMode === 'transactions_only'}
+                        onChange={() => setAdminResetMode('transactions_only')}
+                        className="text-rose-700 focus:ring-rose-500"
+                      />
+                      <span className="font-bold text-slate-900">Transactions Only</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 leading-tight">
+                      Erases Invoices, Quotes, Orders, Bills, Payments, Stock Movements. Resets balances to 0. <strong>Preserves products & vendors.</strong>
+                    </span>
+                  </label>
+
+                  <label
+                    className={`p-3 rounded-xl border cursor-pointer flex flex-col justify-between transition ${
+                      adminResetMode === 'factory_reset'
+                        ? 'bg-rose-50/80 border-rose-300 ring-2 ring-rose-400/50'
+                        : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <input
+                        type="radio"
+                        name="adminResetMode"
+                        value="factory_reset"
+                        checked={adminResetMode === 'factory_reset'}
+                        onChange={() => setAdminResetMode('factory_reset')}
+                        className="text-rose-700 focus:ring-rose-500"
+                      />
+                      <span className="font-bold text-rose-950">Full Factory Reset</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 leading-tight">
+                      Wipes all catalog products, customer lists, vendor masters, and all operational logs. Fresh start.
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Password Input */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-slate-800 font-bold">
+                    Super Admin Master Password <span className="text-rose-600">*</span>
+                  </label>
+                  <span className="text-[10px] text-slate-400 font-mono">Master Password Protected</span>
+                </div>
+                <div className="relative">
+                  <input
+                    type={showAdminPassword ? 'text' : 'password'}
+                    placeholder="Enter master password (e.g. Maxpack@2026 or Admin@123)"
+                    value={adminPasswordInput}
+                    onChange={(e) => setAdminPasswordInput(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono text-xs pr-10 focus:ring-2 focus:ring-rose-500 focus:border-rose-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminPassword(!showAdminPassword)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    {showAdminPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Default Master Passwords: <code className="font-mono text-slate-700 font-bold">Maxpack@2026</code> or <code className="font-mono text-slate-700 font-bold">Admin@123</code> (or custom env password).
+                </p>
+              </div>
+
+              {/* Confirmation Text Safeguard */}
+              <div>
+                <label className="block text-slate-800 font-bold mb-1">
+                  Type <span className="font-mono text-rose-700 font-black">CONFIRM ERASE</span> to Authorize <span className="text-rose-600">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="Type CONFIRM ERASE"
+                  value={adminConfirmationText}
+                  onChange={(e) => setAdminConfirmationText(e.target.value)}
+                  required
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono text-xs uppercase focus:ring-2 focus:ring-rose-500 focus:border-rose-500"
+                />
+              </div>
+
+              {/* Warning Notice */}
+              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-900 text-[11px] flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <p>
+                  <strong>Permanent Action:</strong> Changes will be saved immediately to persistent storage (<code className="font-mono">data/erp-database.json</code>) and pushed to your connected Google Sheet.
+                </p>
+              </div>
+
+              {/* Actions */}
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setShowSuperAdminEraseModal(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  id="btn-authorize-admin-erase"
+                  disabled={isErasingData || !adminPasswordInput || adminConfirmationText !== 'CONFIRM ERASE'}
+                  className="flex items-center gap-2 px-5 py-2 bg-rose-700 hover:bg-rose-800 text-white font-bold rounded-xl text-xs shadow-md transition disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ShieldAlert className="w-4 h-4" />
+                  <span>{isErasingData ? 'Erasing & Persisting...' : 'Authorize & Erase Data'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -1142,6 +1439,124 @@ CREATE TABLE sales_invoices (
                   </div>
                 </label>
               </div>
+            </div>
+
+            {/* Hostinger & Production Service Account Configuration Card */}
+            <div className="pt-4 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setShowAdvancedCredentials(!showAdvancedCredentials)}
+                className="flex items-center justify-between w-full p-2.5 bg-slate-100/70 hover:bg-slate-200/70 rounded-xl transition text-left cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <Key className="w-4 h-4 text-emerald-700" />
+                  <span className="font-bold text-slate-800 text-xs">
+                    Google Service Account Credentials (Hostinger & Production Deployment)
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                    {sheetsStatus?.hasServiceAccount ? 'Credentials Configured' : 'Needs Credentials'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 text-slate-500 text-xs">
+                  <span>{showAdvancedCredentials ? 'Hide Details' : 'Configure Credentials & Private Key'}</span>
+                  {showAdvancedCredentials ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </div>
+              </button>
+
+              {showAdvancedCredentials && (
+                <div className="mt-3 p-4 bg-white rounded-xl border border-slate-200 space-y-4 shadow-2xs">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                    <div>
+                      <h4 className="font-bold text-slate-900 text-xs">Google Cloud Service Account Keys</h4>
+                      <p className="text-[11px] text-slate-500">
+                        Credentials are automatically stored securely in the server's persistent storage so auto-sync works seamlessly across Hostinger server restarts.
+                      </p>
+                    </div>
+
+                    <label className="cursor-pointer px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition">
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Upload JSON Key File</span>
+                      <input
+                        type="file"
+                        accept=".json,application/json"
+                        onChange={handleJsonFileUpload}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3">
+                    <div>
+                      <label className="block text-slate-700 font-bold mb-1 text-[11px]">
+                        Service Account Client Email (client_email)
+                      </label>
+                      <input
+                        type="email"
+                        value={clientEmailInput}
+                        onChange={(e) => setClientEmailInput(e.target.value)}
+                        placeholder="e.g. maxpack-sync@project-id.iam.gserviceaccount.com"
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono text-[11px]"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Must match the email that has "Editor" permissions on your Google Spreadsheet.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-700 font-bold mb-1 text-[11px]">
+                        Private Key (private_key)
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={privateKeyInput}
+                        onChange={(e) => setPrivateKeyInput(e.target.value)}
+                        placeholder="-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC7..."
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono text-[10px]"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Paste the full RSA private key block starting with -----BEGIN PRIVATE KEY-----
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-700 font-bold mb-1 text-[11px]">
+                        Or Paste Entire Service Account JSON File Content
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={jsonKeyInput}
+                        onChange={(e) => {
+                          setJsonKeyInput(e.target.value);
+                          try {
+                            const parsed = JSON.parse(e.target.value.trim());
+                            if (parsed.client_email) setClientEmailInput(parsed.client_email);
+                            if (parsed.private_key) setPrivateKeyInput(parsed.private_key);
+                          } catch {
+                            // typing
+                          }
+                        }}
+                        placeholder='{"type": "service_account", "project_id": "...", "private_key": "...", "client_email": "..."}'
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono text-[10px]"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                      <span className="text-[10px] text-slate-500">
+                        {sheetsStatus?.storageFile ? `Persistent storage: ${sheetsStatus.storageFile}` : 'Persisted automatically on server'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleSaveFullSheetsCredentials}
+                        disabled={isSavingCredentials}
+                        className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white font-bold rounded-lg text-xs transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <CheckCircle className="w-3.5 h-3.5" />
+                        <span>{isSavingCredentials ? 'Saving...' : 'Save & Persist Credentials'}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

@@ -69,7 +69,7 @@ export const api = {
     quotaCoolingDown?: boolean;
     lastError: string | null;
   }>('/sheets/status'),
-  updateSheetsCredentials: (credentials: { spreadsheetId?: string; clientEmail?: string; privateKey?: string }) =>
+  updateSheetsCredentials: (credentials: { spreadsheetId?: string; clientEmail?: string; privateKey?: string; jsonKey?: string }) =>
     request<{ success: boolean; status: any }>('/sheets/credentials', {
       method: 'POST',
       body: JSON.stringify(credentials),
@@ -94,6 +94,8 @@ export const api = {
   getUsers: () => request<User[]>('/users'),
   createUser: (user: { name: string; email: string; role: string; branch?: string }) =>
     request<User>('/users', { method: 'POST', body: JSON.stringify(user) }),
+  deleteUser: (id: string) =>
+    request<{ success: boolean; message: string; deletedUser: User }>(`/users/${id}`, { method: 'DELETE' }),
   loginWithEmail: (credentials: { email: string; name?: string; role?: string; branch?: string }) =>
     request<{ success: boolean; user: User }>('/auth/login', { method: 'POST', body: JSON.stringify(credentials) }),
 
@@ -115,6 +117,11 @@ export const api = {
   // Warehouses & Inventory
   getWarehouses: () => request<Warehouse[]>('/warehouses'),
   getProducts: () => request<Product[]>('/products'),
+  getCategories: () => request<string[]>('/products/categories'),
+  addCategory: (category: string) =>
+    request<string[]>('/products/categories', { method: 'POST', body: JSON.stringify({ category }) }),
+  removeCategory: (category: string) =>
+    request<string[]>(`/products/categories/${encodeURIComponent(category)}`, { method: 'DELETE' }),
   createProduct: (product: Omit<Product, 'id' | 'createdAt'>) =>
     request<Product>('/products', { method: 'POST', body: JSON.stringify(product) }),
   updateProduct: (id: string, updates: Partial<Product>) =>
@@ -174,13 +181,31 @@ export const api = {
     request<PurchaseOrder>(`/purchases/orders/${id}/receive`, { method: 'POST' }),
 
   getSupplierBills: () => request<SupplierBill[]>('/purchases/bills'),
-  createSupplierBill: (bill: Omit<SupplierBill, 'id' | 'createdAt' | 'billNumber'>) =>
+  createSupplierBill: (
+    bill: Omit<SupplierBill, 'id' | 'createdAt' | 'billNumber' | 'balanceDue' | 'status'> & {
+      balanceDue?: number;
+      status?: SupplierBill['status'];
+      updateInventory?: boolean;
+      billNumber?: string;
+    }
+  ) =>
     request<SupplierBill>('/purchases/bills', { method: 'POST', body: JSON.stringify(bill) }),
   paySupplierBill: (billId: string, payment: Omit<Payment, 'id' | 'createdAt' | 'paymentNumber'>) =>
     request<SupplierBill>(`/purchases/bills/${billId}/pay`, {
       method: 'POST',
       body: JSON.stringify(payment),
     }),
+
+  // Super Admin Data Control
+  eraseAllDataWithPassword: (data: {
+    password: string;
+    resetMode?: 'transactions_only' | 'factory_reset';
+    confirmationText: string;
+  }) =>
+    request<{ success: boolean; message: string; erasedCounts?: Record<string, number> }>(
+      '/admin/erase-all-data',
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
 
   // Accounting
   getChartOfAccounts: () => request<ChartOfAccount[]>('/accounting/chart-of-accounts'),

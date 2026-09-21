@@ -14,7 +14,10 @@ import {
   History,
   CheckCircle,
   Building2,
-  X
+  X,
+  Tag,
+  Trash2,
+  FolderPlus
 } from 'lucide-react';
 
 export const InventoryView: React.FC = () => {
@@ -22,9 +25,23 @@ export const InventoryView: React.FC = () => {
 
   const [products, setProducts] = useState<Product[]>([]);
   const [movements, setMovements] = useState<StockMovement[]>([]);
+  const [categories, setCategories] = useState<string[]>([
+    'Corrugated Boxes',
+    'Adhesive Tapes',
+    'Protective Packaging',
+    'Stretch Films',
+    'Poly Bags',
+    'Strapping & Edge',
+  ]);
   const [activeTab, setActiveTab] = useState<'catalog' | 'movements' | 'warehouses'>('catalog');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
+
+  // Category Manager State
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
+  const [deletingCategory, setDeletingCategory] = useState<string | null>(null);
 
   // Modals
   const [showAdjustModal, setShowAdjustModal] = useState(false);
@@ -67,18 +84,83 @@ export const InventoryView: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const [prods, movs] = await Promise.all([
+      const [prods, movs, cats] = await Promise.all([
         api.getProducts(),
         api.getStockMovements(),
+        api.getCategories().catch((): string[] => []),
       ]);
       setProducts(prods);
       setMovements(movs);
+      if (cats && cats.length > 0) {
+        setCategories(cats);
+        setNewProduct((prev) => ({
+          ...prev,
+          category: cats.includes(prev.category) ? prev.category : cats[0],
+        }));
+      }
       if (prods.length > 0) {
         if (!transferProductId) setTransferProductId(prods[0].id);
         if (!adjustProductId) setAdjustProductId(prods[0].id);
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleAddCategory = async (nameToPass?: string) => {
+    const trimmed = (nameToPass || newCategoryName).trim();
+    if (!trimmed) {
+      showToast('Please enter a valid category name', 'error');
+      return;
+    }
+    if (categories.some((c) => c.toLowerCase() === trimmed.toLowerCase())) {
+      showToast(`Category "${trimmed}" already exists`, 'info');
+      setNewProduct((prev) => ({ ...prev, category: trimmed }));
+      setNewCategoryName('');
+      return;
+    }
+
+    setIsAddingCategory(true);
+    try {
+      const updated = await api.addCategory(trimmed);
+      setCategories(updated);
+      setNewProduct((prev) => ({ ...prev, category: trimmed }));
+      setNewCategoryName('');
+      showToast(`Category "${trimmed}" added successfully!`, 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to add category', 'error');
+    } finally {
+      setIsAddingCategory(false);
+    }
+  };
+
+  const handleRemoveCategory = async (catName: string) => {
+    const productsInCat = products.filter((p) => p.category === catName).length;
+    if (productsInCat > 0) {
+      const proceed = window.confirm(
+        `Category "${catName}" currently contains ${productsInCat} product(s). Are you sure you want to remove it from the master list?`
+      );
+      if (!proceed) return;
+    }
+
+    setDeletingCategory(catName);
+    try {
+      const updated = await api.removeCategory(catName);
+      setCategories(updated);
+      if (newProduct.category === catName) {
+        setNewProduct((prev) => ({
+          ...prev,
+          category: updated[0] || 'Packaging',
+        }));
+      }
+      if (selectedCategory === catName) {
+        setSelectedCategory('ALL');
+      }
+      showToast(`Category "${catName}" removed successfully`, 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to remove category', 'error');
+    } finally {
+      setDeletingCategory(null);
     }
   };
 
@@ -295,28 +377,30 @@ export const InventoryView: React.FC = () => {
               />
             </div>
 
-            <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto text-xs">
+            <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto text-xs py-1">
               <span className="text-slate-500 text-[11px] font-medium hidden sm:inline">Category:</span>
-              {[
-                'ALL',
-                'Corrugated Boxes',
-                'Adhesive Tapes',
-                'Protective Packaging',
-                'Stretch Films',
-                'Poly Bags',
-              ].map((c) => (
+              {['ALL', ...categories].map((c) => (
                 <button
                   key={c}
                   onClick={() => setSelectedCategory(c)}
-                  className={`px-3 py-1 rounded-lg text-xs font-medium transition ${
+                  className={`px-3 py-1 rounded-lg text-xs font-medium transition shrink-0 cursor-pointer ${
                     selectedCategory === c
-                      ? 'bg-slate-900 text-white font-bold'
+                      ? 'bg-slate-900 text-white font-bold shadow-xs'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
                   {c}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={() => setShowCategoryManager(true)}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1 transition shrink-0 cursor-pointer ml-1"
+                title="Manage Product Categories"
+              >
+                <Tag className="w-3 h-3 text-emerald-700" />
+                <span>+ Manage Categories</span>
+              </button>
             </div>
           </div>
 
@@ -736,21 +820,123 @@ export const InventoryView: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-700 font-bold mb-1">Category</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-slate-700 font-bold">Category *</label>
+                    <button
+                      type="button"
+                      onClick={() => setShowCategoryManager(!showCategoryManager)}
+                      className="text-[11px] font-bold text-emerald-800 hover:text-emerald-950 underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <Tag className="w-3 h-3 text-emerald-700" />
+                      <span>{showCategoryManager ? 'Close Manager' : '+ Add / Remove Category'}</span>
+                    </button>
+                  </div>
                   <select
                     value={newProduct.category}
                     onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-medium"
                   >
-                    <option value="Corrugated Boxes">Corrugated Boxes</option>
-                    <option value="Adhesive Tapes">Adhesive Tapes</option>
-                    <option value="Protective Packaging">Protective Packaging</option>
-                    <option value="Stretch Films">Stretch Films</option>
-                    <option value="Poly Bags">Poly Bags</option>
-                    <option value="Strapping & Edge">Strapping & Edge</option>
+                    {categories.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
+
+              {/* INLINE CATEGORY ADD / REMOVE PANEL */}
+              {showCategoryManager && (
+                <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-3 animate-in fade-in duration-200">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                      <FolderPlus className="w-3.5 h-3.5 text-emerald-700" />
+                      Manage Product Categories (Add / Remove)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowCategoryManager(false)}
+                      className="text-slate-400 hover:text-slate-700 p-0.5 rounded cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Add category input */}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="Enter new category name (e.g. Wooden Pallets, Air Bubble Roll)..."
+                      value={newCategoryName}
+                      onChange={(e) => setNewCategoryName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddCategory();
+                        }
+                      }}
+                      className="flex-1 px-3 py-1.5 bg-white border border-emerald-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleAddCategory()}
+                      disabled={isAddingCategory || !newCategoryName.trim()}
+                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold transition disabled:opacity-50 flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>{isAddingCategory ? 'Adding...' : 'Add Category'}</span>
+                    </button>
+                  </div>
+
+                  {/* Existing categories list with removal */}
+                  <div>
+                    <p className="text-[10px] uppercase font-bold text-slate-500 mb-1.5">
+                      Existing Categories ({categories.length}) — Click '×' to remove:
+                    </p>
+                    <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1">
+                      {categories.map((cat) => {
+                        const count = products.filter((p) => p.category === cat).length;
+                        const isSelected = newProduct.category === cat;
+                        return (
+                          <div
+                            key={cat}
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border transition ${
+                              isSelected
+                                ? 'bg-emerald-100 text-emerald-950 border-emerald-400 font-bold'
+                                : 'bg-white text-slate-700 border-slate-300 hover:border-slate-400'
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setNewProduct({ ...newProduct, category: cat })}
+                              className="text-left cursor-pointer hover:underline"
+                              title="Select this category"
+                            >
+                              {cat}
+                              <span className="ml-1 text-[10px] text-slate-400 font-normal">
+                                ({count})
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveCategory(cat)}
+                              disabled={deletingCategory === cat}
+                              className="text-slate-400 hover:text-rose-600 p-0.5 rounded transition cursor-pointer"
+                              title={`Remove category "${cat}"`}
+                            >
+                              {deletingCategory === cat ? (
+                                <span className="text-[10px]">...</span>
+                              ) : (
+                                <Trash2 className="w-3 h-3" />
+                              )}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-slate-700 font-bold mb-1">Product Name *</label>
@@ -849,6 +1035,118 @@ export const InventoryView: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* STANDALONE CATEGORY MANAGEMENT MODAL */}
+      {showCategoryManager && !showNewProductModal && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowCategoryManager(false);
+          }}
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 text-slate-900">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-100 text-emerald-800 rounded-xl">
+                  <Tag className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-900">Product Categories Master</h3>
+                  <p className="text-xs text-slate-500">
+                    Add new categories or remove unused categories across the catalog
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCategoryManager(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Add New Category form */}
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+              <label className="block text-xs font-bold text-slate-700">Add New Category</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="e.g. Wooden Pallets, Air Bubble Roll, Edge Protectors..."
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddCategory();
+                    }
+                  }}
+                  className="flex-1 px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleAddCategory()}
+                  disabled={isAddingCategory || !newCategoryName.trim()}
+                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white font-bold rounded-lg text-xs transition flex items-center gap-1.5 shadow-xs disabled:opacity-50 cursor-pointer shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{isAddingCategory ? 'Adding...' : 'Add Category'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Current Categories List */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Active Categories ({categories.length})
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  Total Catalog Products: {products.length}
+                </span>
+              </div>
+              <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                {categories.map((cat) => {
+                  const count = products.filter((p) => p.category === cat).length;
+                  return (
+                    <div
+                      key={cat}
+                      className="flex items-center justify-between p-2.5 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200 text-xs transition"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Tag className="w-3.5 h-3.5 text-slate-400" />
+                        <span className="font-semibold text-slate-900">{cat}</span>
+                        <span className="px-2 py-0.5 bg-slate-200 text-slate-700 rounded-full text-[10px] font-mono">
+                          {count} item{count !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveCategory(cat)}
+                        disabled={deletingCategory === cat}
+                        className="px-2.5 py-1 text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 rounded-lg text-xs font-semibold transition flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                        title={`Remove "${cat}"`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>{deletingCategory === cat ? 'Deleting...' : 'Remove'}</span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowCategoryManager(false)}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}

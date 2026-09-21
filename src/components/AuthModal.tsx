@@ -13,7 +13,8 @@ import {
   Sparkles,
   AlertCircle,
   LogIn,
-  UserPlus
+  UserPlus,
+  Trash2
 } from 'lucide-react';
 
 interface AuthModalProps {
@@ -22,7 +23,7 @@ interface AuthModalProps {
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
-  const { users, currentUser, login, showToast } = useErp();
+  const { users, currentUser, login, deleteUser, showToast } = useErp();
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -159,7 +160,29 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                       <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate">{u.email}</p>
                       <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-medium">{u.role}</span>
                     </div>
-                    <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {users.length > 1 && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            if (window.confirm(`Are you sure you want to remove ${u.name} (${u.email}) from the system?`)) {
+                              try {
+                                await deleteUser(u.id);
+                              } catch (err) {
+                                // toast handled in ErpContext
+                              }
+                            }
+                          }}
+                          title={`Delete user ${u.name}`}
+                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-100 dark:hover:bg-rose-950/60 rounded-md transition"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </span>
+                      )}
+                      <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    </div>
                   </button>
                 );
               })}

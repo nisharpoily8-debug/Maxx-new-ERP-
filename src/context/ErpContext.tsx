@@ -28,6 +28,7 @@ interface ErpContextType {
   login: (email: string, password?: string, extra?: { name?: string; role?: UserRole; branch?: string }) => Promise<void>;
   logout: () => void;
   addUser: (userData: { name: string; email: string; role: UserRole; branch?: string }) => Promise<User>;
+  deleteUser: (id: string) => Promise<boolean>;
 }
 
 const ErpContext = createContext<ErpContextType | undefined>(undefined);
@@ -169,6 +170,36 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return created;
   };
 
+  const deleteUser = async (id: string): Promise<boolean> => {
+    try {
+      const target = users.find(u => u.id === id);
+      if (!target) throw new Error('User not found.');
+      if (users.length <= 1) {
+        throw new Error('Cannot delete the only remaining user account.');
+      }
+      await api.deleteUser(id);
+      const remaining = users.filter(u => u.id !== id);
+      setUsers(remaining);
+
+      // If deleted user is currently active, switch session to another available user
+      if (currentUser.id === id) {
+        if (remaining.length > 0) {
+          setCurrentUserState(remaining[0]);
+          localStorage.setItem('maxpack_active_user', remaining[0].name);
+          localStorage.setItem('maxpack_active_user_id', remaining[0].id);
+          localStorage.setItem('maxpack_auth_email', remaining[0].email);
+          showToast(`Deleted active user. Switched active profile to ${remaining[0].name}.`, 'info');
+        }
+      } else {
+        showToast(`Removed user ${target.name} (${target.email}) successfully.`, 'success');
+      }
+      return true;
+    } catch (err: any) {
+      showToast(err.message || 'Failed to delete user', 'error');
+      throw err;
+    }
+  };
+
   const setCurrentUser = (user: User) => {
     setCurrentUserState(user);
     localStorage.setItem('maxpack_active_user_id', user.id);
@@ -293,6 +324,7 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         login,
         logout,
         addUser,
+        deleteUser,
       }}
     >
       {children}

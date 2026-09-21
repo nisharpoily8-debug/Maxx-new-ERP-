@@ -1,10 +1,64 @@
 import { google } from 'googleapis';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { ERP_SHEETS_SCHEMA } from './sheetsSchema.ts';
 
 export interface GoogleSheetsConfig {
   spreadsheetId: string;
   clientEmail: string;
   privateKey: string;
+}
+
+// Ensure persistent config directory exists for Hostinger/production restarts
+const currentDir = typeof __dirname !== 'undefined'
+  ? __dirname
+  : (typeof import.meta !== 'undefined' && import.meta.url ? path.dirname(fileURLToPath(import.meta.url)) : process.cwd());
+
+const PERSISTENT_CONFIG_PATHS = [
+  path.resolve(process.cwd(), 'data', 'sheets-config.json'),
+  path.resolve(currentDir, '..', 'data', 'sheets-config.json'),
+  path.resolve(currentDir, 'sheets-config.json'),
+];
+
+function getActiveConfigFilePath(): string {
+  for (const p of PERSISTENT_CONFIG_PATHS) {
+    if (fs.existsSync(p)) return p;
+  }
+  return PERSISTENT_CONFIG_PATHS[0];
+}
+
+function loadPersistedSheetsConfig(): Partial<GoogleSheetsConfig> | null {
+  try {
+    for (const p of PERSISTENT_CONFIG_PATHS) {
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed.spreadsheetId || parsed.clientEmail) {
+          return parsed;
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn('[GoogleSheets] Could not read persisted sheets-config.json:', err.message);
+  }
+  return null;
+}
+
+function savePersistedSheetsConfig(config: Partial<GoogleSheetsConfig>): void {
+  try {
+    const targetFile = PERSISTENT_CONFIG_PATHS[0];
+    const targetDir = path.dirname(targetFile);
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+    const current = loadPersistedSheetsConfig() || {};
+    const merged = { ...current, ...config };
+    fs.writeFileSync(targetFile, JSON.stringify(merged, null, 2), 'utf-8');
+    console.log(`[GoogleSheets] Successfully persisted Google Sheets configuration to: ${targetFile}`);
+  } catch (err: any) {
+    console.warn('[GoogleSheets] Could not persist sheets configuration to disk:', err.message);
+  }
 }
 
 function cleanSpreadsheetId(id: string): string {
@@ -55,6 +109,7 @@ export class GoogleSheetsService {
   }
 
   public initFromEnv() {
+    // 1. Check environment variables
     const rawSpreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID || '';
     const rawClientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '';
     const rawPrivateKey = process.env.GOOGLE_PRIVATE_KEY || '';
@@ -63,7 +118,7 @@ export class GoogleSheetsService {
     let clientEmail = cleanClientEmail(rawClientEmail);
     let privateKey = cleanPrivateKey(rawPrivateKey);
 
-    // Handle JSON file string if provided in env
+    // 2. Handle JSON file string if provided in env
     if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
       try {
         const parsed = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
@@ -73,6 +128,20 @@ export class GoogleSheetsService {
         }
       } catch (e) {
         console.warn('[GoogleSheets] Failed to parse GOOGLE_SERVICE_ACCOUNT_JSON:', e);
+      }
+    }
+
+    // 3. Fallback to persisted disk configuration (crucial for Hostinger server restarts/recycles)
+    const persisted = loadPersistedSheetsConfig();
+    if (persisted) {
+      if (!spreadsheetId && persisted.spreadsheetId) {
+        spreadsheetId = cleanSpreadsheetId(persisted.spreadsheetId);
+      }
+      if (!clientEmail && persisted.clientEmail) {
+        clientEmail = cleanClientEmail(persisted.clientEmail);
+      }
+      if (!privateKey && persisted.privateKey) {
+        privateKey = cleanPrivateKey(persisted.privateKey);
       }
     }
 
@@ -93,17 +162,29 @@ export class GoogleSheetsService {
         this.sheets = google.sheets({ version: 'v4', auth });
         this.isConfigured = !!this.config.spreadsheetId;
         this.lastError = null;
-        console.log('[GoogleSheets] Initialized with Service Account/ID:', this.config.clientEmail);
+        console.log('[GoogleSheets] Initialized with Service Account/ID:', this.config.clientEmail, '| Configured:', this.isConfigured);
       } catch (err: any) {
         this.lastError = err.message || 'Failed to initialize Google Auth';
         console.error('[GoogleSheets] Auth initialization error:', err);
       }
     } else {
       this.isConfigured = false;
+      if (spreadsheetId) {
+        this.config = {
+          spreadsheetId,
+          clientEmail: '',
+          privateKey: '',
+        };
+      }
     }
   }
 
   public getStatus() {
+    // Auto-heal / reload if not yet configured
+    if (!this.isConfigured) {
+      this.initFromEnv();
+    }
+
     let pendingCount = 0;
     for (const items of this.appendQueue.values()) {
       pendingCount += items.length;
@@ -124,6 +205,7 @@ export class GoogleSheetsService {
       pendingQueueCount: pendingCount,
       quotaCoolingDown: Date.now() < this.quotaCooldownUntil,
       lastError: this.lastError,
+      storageFile: getActiveConfigFilePath(),
     };
   }
 
@@ -144,12 +226,31 @@ export class GoogleSheetsService {
         this.initFromEnv();
       }
     }
+
+    // Persist to disk for Hostinger restarts
+    savePersistedSheetsConfig({ spreadsheetId: cleaned });
   }
 
-  public updateCredentials(params: { spreadsheetId?: string; clientEmail?: string; privateKey?: string }) {
-    const curSpreadsheetId = params.spreadsheetId !== undefined ? cleanSpreadsheetId(params.spreadsheetId) : (this.config?.spreadsheetId || '');
-    const curClientEmail = params.clientEmail !== undefined ? cleanClientEmail(params.clientEmail) : (this.config?.clientEmail || '');
-    const curPrivateKey = params.privateKey !== undefined ? cleanPrivateKey(params.privateKey) : (this.config?.privateKey || '');
+  public updateCredentials(params: {
+    spreadsheetId?: string;
+    clientEmail?: string;
+    privateKey?: string;
+    jsonKey?: string;
+  }) {
+    let curSpreadsheetId = params.spreadsheetId !== undefined ? cleanSpreadsheetId(params.spreadsheetId) : (this.config?.spreadsheetId || '');
+    let curClientEmail = params.clientEmail !== undefined ? cleanClientEmail(params.clientEmail) : (this.config?.clientEmail || '');
+    let curPrivateKey = params.privateKey !== undefined ? cleanPrivateKey(params.privateKey) : (this.config?.privateKey || '');
+
+    // Allow user to supply raw service account JSON string
+    if (params.jsonKey && params.jsonKey.trim()) {
+      try {
+        const parsed = JSON.parse(params.jsonKey.trim());
+        if (parsed.client_email) curClientEmail = cleanClientEmail(parsed.client_email);
+        if (parsed.private_key) curPrivateKey = cleanPrivateKey(parsed.private_key);
+      } catch (e: any) {
+        console.warn('[GoogleSheets] Failed to parse provided jsonKey:', e.message);
+      }
+    }
 
     if (curClientEmail && curPrivateKey) {
       this.config = {
@@ -168,6 +269,14 @@ export class GoogleSheetsService {
         this.sheets = google.sheets({ version: 'v4', auth });
         this.isConfigured = !!this.config.spreadsheetId;
         this.lastError = null;
+
+        // Persist to disk
+        savePersistedSheetsConfig({
+          spreadsheetId: curSpreadsheetId,
+          clientEmail: curClientEmail,
+          privateKey: curPrivateKey,
+        });
+        console.log('[GoogleSheets] Credentials updated and saved to disk. Ready to sync.');
       } catch (err: any) {
         this.lastError = err.message;
       }
@@ -180,6 +289,9 @@ export class GoogleSheetsService {
    * Test the connection to Google Sheets
    */
   public async testConnection(spreadsheetIdOverride?: string): Promise<{ success: boolean; message: string; sheetNames?: string[] }> {
+    if (!this.sheets || !this.config?.spreadsheetId) {
+      this.initFromEnv();
+    }
     const targetSpreadsheetId = cleanSpreadsheetId(spreadsheetIdOverride || this.config?.spreadsheetId || '');
 
     if (!targetSpreadsheetId) {
@@ -189,7 +301,7 @@ export class GoogleSheetsService {
     if (!this.sheets || !this.config?.clientEmail) {
       return {
         success: false,
-        message: 'Google Service Account credentials are not configured. Check GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY in server environment.',
+        message: 'Google Service Account credentials are not configured. Check GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY in server environment, or configure in Settings tab.',
       };
     }
 
@@ -300,6 +412,9 @@ export class GoogleSheetsService {
    * Read all rows from a sheet tab into an array of objects
    */
   public async readTable<T>(sheetTitle: string): Promise<T[]> {
+    if (!this.sheets || !this.config?.spreadsheetId) {
+      this.initFromEnv();
+    }
     if (!this.sheets || !this.config?.spreadsheetId) return [];
 
     try {
@@ -405,6 +520,9 @@ export class GoogleSheetsService {
    * to strictly respect Google Sheets 60 writes/min API quota.
    */
   public async appendRow(sheetTitle: string, rowData: any, headers?: string[]): Promise<void> {
+    if (!this.sheets || !this.config?.spreadsheetId) {
+      this.initFromEnv();
+    }
     if (!this.sheets || !this.config?.spreadsheetId) return;
 
     if (!this.appendQueue.has(sheetTitle)) {
@@ -521,7 +639,10 @@ export class GoogleSheetsService {
     message: string;
   }> {
     if (!this.sheets || !this.config?.spreadsheetId) {
-      throw new Error('Google Sheets is not configured or missing spreadsheet ID');
+      this.initFromEnv();
+    }
+    if (!this.sheets || !this.config?.spreadsheetId) {
+      throw new Error('Google Sheets is not configured or missing spreadsheet ID. Please verify Settings -> Google Sheets Database Sync.');
     }
 
     const spreadsheetId = cleanSpreadsheetId(this.config.spreadsheetId);

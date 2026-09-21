@@ -1,14 +1,15 @@
+import './server/loadEnv.ts';
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
-import dotenv from 'dotenv';
 import { dataStore } from './server/dataLayer.ts';
 import { googleSheetsService } from './server/googleSheetsService.ts';
 
-dotenv.config();
-
 const app = express();
-const PORT = 3000;
+// Port 3000 is required in AI Studio sandbox. In external deployment (such as Hostinger),
+// allow the dynamic port provided by Hostinger via process.env.PORT, defaulting to 3000.
+const PORT = process.env.APPLET_ID ? 3000 : (Number(process.env.PORT) || 3000);
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -78,9 +79,12 @@ app.post('/api/sheets/init-template', async (req, res) => {
 
 app.post('/api/sheets/credentials', async (req, res) => {
   try {
-    const { spreadsheetId, clientEmail, privateKey } = req.body || {};
-    googleSheetsService.updateCredentials({ spreadsheetId, clientEmail, privateKey });
+    const { spreadsheetId, clientEmail, privateKey, jsonKey } = req.body || {};
+    googleSheetsService.updateCredentials({ spreadsheetId, clientEmail, privateKey, jsonKey });
     const status = googleSheetsService.getStatus();
+    if (status.configured) {
+      dataStore.triggerAutoSync('Credentials Updated');
+    }
     res.json({ success: true, status });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
@@ -141,6 +145,16 @@ app.post('/api/users', async (req, res) => {
     }
     const user = await dataStore.createUser({ name, email, role, branch }, adminUser);
     res.status(201).json(user);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const adminUser = req.headers['x-user-name'] as string || 'Super Admin';
+    const result = await dataStore.deleteUser(req.params.id, adminUser);
+    res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -236,6 +250,36 @@ app.get('/api/products', async (req, res) => {
   res.json(products);
 });
 
+app.get('/api/products/categories', async (req, res) => {
+  const categories = await dataStore.getCategories();
+  res.json(categories);
+});
+
+app.post('/api/products/categories', async (req, res) => {
+  try {
+    const user = (req.headers['x-user-name'] as string) || 'Manager';
+    const { category } = req.body;
+    if (!category || typeof category !== 'string' || !category.trim()) {
+      return res.status(400).json({ error: 'Valid category string is required' });
+    }
+    const categories = await dataStore.addCategory(category, user);
+    res.status(201).json(categories);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/products/categories/:category', async (req, res) => {
+  try {
+    const user = (req.headers['x-user-name'] as string) || 'Manager';
+    const category = decodeURIComponent(req.params.category);
+    const categories = await dataStore.removeCategory(category, user);
+    res.json(categories);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.post('/api/products', async (req, res) => {
   try {
     const user = req.headers['x-user-name'] as string || 'Manager';
@@ -314,6 +358,29 @@ app.post('/api/data/clear-demo', async (req, res) => {
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/erase-all-data', async (req, res) => {
+  try {
+    const adminUser = (req.headers['x-user-name'] as string) || 'Super Admin';
+    const { password, resetMode, confirmationText } = req.body || {};
+
+    if (!password) {
+      return res.status(400).json({ success: false, message: 'Super Admin password is required to erase data.' });
+    }
+
+    if (confirmationText !== 'CONFIRM ERASE' && confirmationText !== 'DELETE') {
+      return res.status(400).json({
+        success: false,
+        message: 'Security safeguard: Please type "CONFIRM ERASE" exactly to authorize data erasure.',
+      });
+    }
+
+    const result = await dataStore.eraseAllDataWithPassword(password, resetMode, adminUser);
+    res.json(result);
+  } catch (err: any) {
+    res.status(403).json({ success: false, message: err.message });
   }
 });
 
@@ -518,17 +585,42 @@ app.get('/api/audit-logs', async (req, res) => {
 // ============================================================================
 
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  const isProduction =
+    process.env.NODE_ENV === 'production' ||
+    (typeof __filename !== 'undefined' && __filename.endsWith('.cjs')) ||
+    (!process.env.APPLET_ID && fs.existsSync(path.join(process.cwd(), 'dist', 'index.html')));
+
+  if (!isProduction) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    // Look for dist folder in multiple common paths for Hostinger & production servers
+    const candidatePaths = [
+      path.join(process.cwd(), 'dist'),
+      typeof __dirname !== 'undefined' ? __dirname : '',
+      typeof __dirname !== 'undefined' ? path.join(__dirname, '..', 'dist') : '',
+    ].filter(Boolean);
+
+    let distPath = path.join(process.cwd(), 'dist');
+    for (const candidate of candidatePaths) {
+      if (fs.existsSync(path.join(candidate, 'index.html'))) {
+        distPath = candidate;
+        break;
+      }
+    }
+
+    console.log(`[Production] Serving static SPA frontend from: ${distPath}`);
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      const indexPath = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(404).send('Production build (index.html) not found. Please run "npm run build".');
+      }
     });
   }
 

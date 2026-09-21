@@ -15,14 +15,19 @@ import {
   Sparkles,
   Info,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Trash2,
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
 
 export const TeamView: React.FC = () => {
-  const { users, currentUser, setCurrentUser, addUser, showToast, can, setShowAuthModal } = useErp();
+  const { users, currentUser, setCurrentUser, addUser, deleteUser, showToast, can, setShowAuthModal } = useErp();
   const [showAddModal, setShowAddModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const [newStaff, setNewStaff] = useState({
     name: '',
@@ -120,6 +125,19 @@ export const TeamView: React.FC = () => {
       setError(err.message || 'Failed to create user account.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!userToDelete) return;
+    try {
+      setIsDeleting(true);
+      await deleteUser(userToDelete.id);
+      setUserToDelete(null);
+    } catch (err: any) {
+      // Toast notification is handled in ErpContext
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -243,24 +261,39 @@ export const TeamView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                {isCurrent ? (
-                  <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-bold flex items-center gap-1">
-                    <UserCheck className="w-3.5 h-3.5" />
-                    <span>Currently Signed In</span>
-                  </span>
-                ) : (
+              <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
+                <div>
+                  {isCurrent ? (
+                    <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-bold flex items-center gap-1">
+                      <UserCheck className="w-3.5 h-3.5" />
+                      <span>Currently Signed In</span>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setCurrentUser(u);
+                        showToast(`Switched active profile to ${u.name} (${u.email})`, 'info');
+                      }}
+                      className="text-[11px] text-slate-600 dark:text-slate-400 hover:text-emerald-700 dark:hover:text-emerald-400 font-bold hover:underline cursor-pointer"
+                    >
+                      Sign in as {u.name.split(' ')[0]} →
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-400 font-mono">ID: {u.id}</span>
                   <button
-                    onClick={() => {
-                      setCurrentUser(u);
-                      showToast(`Switched active profile to ${u.name} (${u.email})`, 'info');
-                    }}
-                    className="text-[11px] text-slate-600 dark:text-slate-400 hover:text-emerald-700 dark:hover:text-emerald-400 font-bold hover:underline cursor-pointer"
+                    onClick={() => setUserToDelete(u)}
+                    disabled={users.length <= 1}
+                    title={users.length <= 1 ? 'At least one user account must remain in the ERP system' : `Delete user account ${u.name}`}
+                    className={`p-1.5 rounded-lg transition text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer ${
+                      users.length <= 1 ? 'opacity-30 cursor-not-allowed' : ''
+                    }`}
                   >
-                    Sign in as {u.name.split(' ')[0]} →
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
-                )}
-                <span className="text-[10px] text-slate-400 font-mono">ID: {u.id}</span>
+                </div>
               </div>
             </div>
           );
@@ -437,6 +470,94 @@ export const TeamView: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete User Confirmation Modal */}
+      {userToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 max-w-md w-full p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-950/60 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                  Delete User Profile
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Are you sure you want to remove this user from the ERP system?
+                </p>
+              </div>
+              <button
+                onClick={() => setUserToDelete(null)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700/70 space-y-1.5 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Name:</span>
+                <span className="font-bold text-slate-900 dark:text-slate-100">{userToDelete.name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Email:</span>
+                <span className="font-mono text-slate-900 dark:text-slate-100">{userToDelete.email}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Assigned Role:</span>
+                <span className="font-bold text-emerald-600 dark:text-emerald-400">{userToDelete.role}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Branch:</span>
+                <span className="text-slate-700 dark:text-slate-300">{userToDelete.branch || 'DIP Central'}</span>
+              </div>
+            </div>
+
+            {currentUser.id === userToDelete.id && (
+              <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 rounded-xl text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Note:</strong> You are deleting your currently active profile. Your session will automatically switch to another team member.
+                </span>
+              </div>
+            )}
+
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Historical transactions, invoices, and audit entries previously generated by this user will be preserved for UAE FTA compliance.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setUserToDelete(null)}
+                disabled={isDeleting}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteConfirm}
+                disabled={isDeleting}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Removing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Yes, Delete User</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

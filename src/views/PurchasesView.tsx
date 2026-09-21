@@ -16,8 +16,10 @@ import {
   Boxes,
   Receipt,
   X,
-  Trash2
+  Trash2,
+  Eye
 } from 'lucide-react';
+import { PurchaseOrderModal } from '../components/PurchaseOrderModal.tsx';
 
 export const PurchasesView: React.FC = () => {
   const { formatAED, formatUAE, warehouses, showToast, can } = useErp();
@@ -28,7 +30,8 @@ export const PurchasesView: React.FC = () => {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
 
-  // Modals
+  // Modals & Preview
+  const [selectedPOForPreview, setSelectedPOForPreview] = useState<PurchaseOrder | null>(null);
   const [showNewPOModal, setShowNewPOModal] = useState(false);
   const [showPayBillModal, setShowPayBillModal] = useState(false);
   const [showNewSupplierModal, setShowNewSupplierModal] = useState(false);
@@ -56,6 +59,33 @@ export const PurchasesView: React.FC = () => {
   const [destWarehouseId, setDestWarehouseId] = useState('wh-1');
   const [poItems, setPoItems] = useState<PurchaseItem[]>([]);
   const [poNotes, setPoNotes] = useState('');
+
+  // Direct Purchase Bill State
+  const [showDirectBillModal, setShowDirectBillModal] = useState(false);
+  const [isSubmittingDirectBill, setIsSubmittingDirectBill] = useState(false);
+  const [directBillForm, setDirectBillForm] = useState({
+    supplierId: '',
+    supplierInvoiceNo: '',
+    date: new Date().toISOString().split('T')[0],
+    dueDate: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+    warehouseId: 'wh-1',
+    notes: '',
+    updateInventory: true,
+    isPaid: false,
+    paidAmount: 0,
+    paymentMethod: 'Bank Transfer' as 'Bank Transfer' | 'Cash' | 'Cheque',
+  });
+  const [directBillItems, setDirectBillItems] = useState<
+    Array<{
+      productId: string;
+      name: string;
+      quantity: number;
+      unitCost: number;
+      vatRate: number;
+      vatAmount: number;
+      total: number;
+    }>
+  >([]);
 
   useEffect(() => {
     loadData();
@@ -218,6 +248,124 @@ export const PurchasesView: React.FC = () => {
     }
   };
 
+  const handleAddDirectBillItem = (productId?: string) => {
+    const p = productId ? products.find((pr) => pr.id === productId) : products[0];
+    const unitCost = p ? p.costPrice : 10;
+    const quantity = 100;
+    const vatRate = 0.05;
+    const vatAmount = Math.round(unitCost * quantity * vatRate * 100) / 100;
+    const total = Math.round((unitCost * quantity + vatAmount) * 100) / 100;
+
+    setDirectBillItems((prev) => [
+      ...prev,
+      {
+        productId: p ? p.id : '',
+        name: p ? p.name : 'Packaging Material',
+        quantity,
+        unitCost,
+        vatRate,
+        vatAmount,
+        total,
+      },
+    ]);
+  };
+
+  const handleUpdateDirectBillItem = (
+    index: number,
+    field: 'productId' | 'name' | 'quantity' | 'unitCost' | 'vatRate',
+    val: any
+  ) => {
+    setDirectBillItems((prev) => {
+      const copy = [...prev];
+      const current = { ...copy[index] };
+
+      if (field === 'productId') {
+        const prod = products.find((p) => p.id === val);
+        if (prod) {
+          current.productId = prod.id;
+          current.name = prod.name;
+          current.unitCost = prod.costPrice;
+        }
+      } else if (field === 'quantity') {
+        current.quantity = Math.max(0, Number(val) || 0);
+      } else if (field === 'unitCost') {
+        current.unitCost = Math.max(0, Number(val) || 0);
+      } else if (field === 'vatRate') {
+        current.vatRate = Number(val);
+      } else if (field === 'name') {
+        current.name = String(val);
+      }
+
+      const net = current.quantity * current.unitCost;
+      current.vatAmount = Math.round(net * current.vatRate * 100) / 100;
+      current.total = Math.round((net + current.vatAmount) * 100) / 100;
+
+      copy[index] = current;
+      return copy;
+    });
+  };
+
+  const handleRemoveDirectBillItem = (index: number) => {
+    setDirectBillItems((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleCreateDirectBill = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!directBillForm.supplierId) {
+      showToast('Please select a supplier / vendor', 'error');
+      return;
+    }
+    if (directBillItems.length === 0) {
+      showToast('Please add at least one line item to the purchase bill', 'error');
+      return;
+    }
+
+    const sup = suppliers.find((s) => s.id === directBillForm.supplierId);
+    if (!sup) {
+      showToast('Selected supplier not found', 'error');
+      return;
+    }
+
+    const subtotal = directBillItems.reduce((sum, i) => sum + i.quantity * i.unitCost, 0);
+    const vatAmount = directBillItems.reduce((sum, i) => sum + i.vatAmount, 0);
+    const total = subtotal + vatAmount;
+    const paidAmount = directBillForm.isPaid ? total : Number(directBillForm.paidAmount) || 0;
+
+    setIsSubmittingDirectBill(true);
+    try {
+      const created = await api.createSupplierBill({
+        supplierId: sup.id,
+        supplierName: sup.name,
+        supplierTrn: sup.trn || '',
+        supplierInvoiceNo:
+          directBillForm.supplierInvoiceNo.trim() || `INV-${Date.now().toString().slice(-6)}`,
+        date: directBillForm.date,
+        dueDate: directBillForm.dueDate,
+        items: directBillItems,
+        subtotal: Math.round(subtotal * 100) / 100,
+        vatAmount: Math.round(vatAmount * 100) / 100,
+        total: Math.round(total * 100) / 100,
+        paidAmount,
+        warehouseId: directBillForm.warehouseId,
+        notes: directBillForm.notes || 'Direct Purchase Bill entry',
+        updateInventory: directBillForm.updateInventory,
+      });
+
+      showToast(
+        `Direct Purchase Bill ${created.billNumber} from ${sup.name} recorded successfully!`,
+        'success'
+      );
+      setShowDirectBillModal(false);
+      setDirectBillItems([]);
+      setActiveTab('bills');
+      await loadData();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to record direct purchase bill', 'error');
+    } finally {
+      setIsSubmittingDirectBill(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Header */}
@@ -239,6 +387,25 @@ export const PurchasesView: React.FC = () => {
             >
               <Building2 className="w-3.5 h-3.5 text-emerald-700" />
               <span>+ Add Vendor / Supplier</span>
+            </button>
+          )}
+
+          {can('purchases') && (
+            <button
+              id="btn-direct-purchase-bill-top"
+              onClick={() => {
+                if (suppliers.length > 0 && !directBillForm.supplierId) {
+                  setDirectBillForm((prev) => ({ ...prev, supplierId: suppliers[0].id }));
+                }
+                if (directBillItems.length === 0 && products.length > 0) {
+                  handleAddDirectBillItem(products[0].id);
+                }
+                setShowDirectBillModal(true);
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-700 hover:bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow-xs transition"
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              <span>+ Direct Purchase Bill</span>
             </button>
           )}
 
@@ -328,7 +495,16 @@ export const PurchasesView: React.FC = () => {
                 ) : (
                   purchaseOrders.map((po) => (
                   <tr key={po.id} className="hover:bg-slate-50/80 transition">
-                    <td className="py-3 px-4 font-mono font-bold text-slate-900">{po.poNumber}</td>
+                    <td className="py-3 px-4 font-mono font-bold text-slate-900">
+                      <button
+                        onClick={() => setSelectedPOForPreview(po)}
+                        className="text-emerald-800 hover:text-emerald-950 hover:underline flex items-center gap-1 font-mono font-bold text-xs cursor-pointer"
+                        title="View / Print Purchase Order document"
+                      >
+                        <FileText className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>{po.poNumber}</span>
+                      </button>
+                    </td>
                     <td className="py-3 px-4">
                       <p className="font-semibold text-slate-900">{po.supplierName}</p>
                       <p className="text-[10px] text-slate-400 font-mono">TRN: {po.supplierTrn}</p>
@@ -352,16 +528,27 @@ export const PurchasesView: React.FC = () => {
                       </span>
                     </td>
                     <td className="py-3 px-4 text-right">
-                      {po.status !== 'Received' ? (
+                      <div className="flex items-center justify-end gap-1.5">
                         <button
-                          onClick={() => handleReceivePO(po.id)}
-                          className="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg font-semibold text-xs shadow-xs transition"
+                          onClick={() => setSelectedPOForPreview(po)}
+                          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium text-xs border border-slate-200 transition flex items-center gap-1 cursor-pointer"
+                          title="Preview & Print PO"
                         >
-                          Receive Goods (GRN)
+                          <Eye className="w-3 h-3 text-slate-500" />
+                          <span>View PO</span>
                         </button>
-                      ) : (
-                        <span className="text-slate-400 font-medium">Stock Received</span>
-                      )}
+
+                        {po.status !== 'Received' ? (
+                          <button
+                            onClick={() => handleReceivePO(po.id)}
+                            className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg font-semibold text-xs shadow-xs transition cursor-pointer"
+                          >
+                            Receive (GRN)
+                          </button>
+                        ) : (
+                          <span className="text-slate-400 font-medium px-1 text-[11px]">Received</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )))}
@@ -373,7 +560,35 @@ export const PurchasesView: React.FC = () => {
 
       {/* 2. SUPPLIER BILLS TAB */}
       {activeTab === 'bills' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+            <div>
+              <h3 className="font-bold text-slate-900 text-sm">Vendor Tax Invoices & Trade Payables</h3>
+              <p className="text-xs text-slate-500">
+                Manage supplier bills, track due dates, and record direct vendor purchase bills with automatic inventory addition.
+              </p>
+            </div>
+            {can('purchases') && (
+              <button
+                id="btn-direct-purchase-bill-tab"
+                onClick={() => {
+                  if (suppliers.length > 0 && !directBillForm.supplierId) {
+                    setDirectBillForm((prev) => ({ ...prev, supplierId: suppliers[0].id }));
+                  }
+                  if (directBillItems.length === 0 && products.length > 0) {
+                    handleAddDirectBillItem(products[0].id);
+                  }
+                  setShowDirectBillModal(true);
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 bg-indigo-700 hover:bg-indigo-600 text-white rounded-xl text-xs font-bold shadow-xs transition shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Enter Purchase Bill Directly</span>
+              </button>
+            )}
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-left">
               <thead>
@@ -452,6 +667,7 @@ export const PurchasesView: React.FC = () => {
             </table>
           </div>
         </div>
+      </div>
       )}
 
       {/* 3. SUPPLIERS TAB */}
@@ -915,6 +1131,341 @@ export const PurchasesView: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* DIRECT PURCHASE BILL ENTRY MODAL */}
+      {/* ========================================================================= */}
+      {showDirectBillModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="relative w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
+            <div className="flex items-center justify-between p-5 bg-indigo-900 text-white">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-800 rounded-lg">
+                  <Receipt className="w-5 h-5 text-indigo-200" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm">Enter Direct Purchase Bill</h3>
+                  <p className="text-[11px] text-indigo-200">
+                    Record vendor tax invoice directly without requiring a prior PO
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowDirectBillModal(false)}
+                className="p-1 text-indigo-300 hover:text-white rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleCreateDirectBill}
+              className="p-5 space-y-4 text-xs max-h-[80vh] overflow-y-auto"
+            >
+              {/* Supplier & Warehouse Details */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-slate-800 font-bold">
+                      Supplier / Vendor <span className="text-rose-600">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowNewSupplierModal(true)}
+                      className="text-indigo-700 hover:text-indigo-800 font-semibold text-[11px] underline"
+                    >
+                      + Add New Vendor
+                    </button>
+                  </div>
+                  <select
+                    value={directBillForm.supplierId}
+                    onChange={(e) => setDirectBillForm({ ...directBillForm, supplierId: e.target.value })}
+                    required
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-medium"
+                  >
+                    <option value="">-- Select Vendor / Paper Mill --</option>
+                    {suppliers.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.trn ? `TRN: ${s.trn}` : 'No TRN'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-800 font-bold mb-1">
+                    Supplier Invoice / Ref # <span className="text-rose-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. INV-90481"
+                    value={directBillForm.supplierInvoiceNo}
+                    onChange={(e) =>
+                      setDirectBillForm({ ...directBillForm, supplierInvoiceNo: e.target.value })
+                    }
+                    required
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Dates & Receiving Warehouse */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-slate-800 font-bold mb-1">Bill / Invoice Date</label>
+                  <input
+                    type="date"
+                    value={directBillForm.date}
+                    onChange={(e) => setDirectBillForm({ ...directBillForm, date: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-800 font-bold mb-1">Payment Due Date</label>
+                  <input
+                    type="date"
+                    value={directBillForm.dueDate}
+                    onChange={(e) => setDirectBillForm({ ...directBillForm, dueDate: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-800 font-bold mb-1">Receiving Warehouse</label>
+                  <select
+                    value={directBillForm.warehouseId}
+                    onChange={(e) => setDirectBillForm({ ...directBillForm, warehouseId: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-medium"
+                  >
+                    {warehouses.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Items Table */}
+              <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/50 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold uppercase text-[11px] text-slate-800 tracking-wide">
+                    Bill Purchased Line Items
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleAddDirectBillItem(products[0]?.id)}
+                    className="flex items-center gap-1 text-indigo-700 hover:text-indigo-900 font-bold text-xs"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Item Line</span>
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {directBillItems.length === 0 ? (
+                    <div className="p-4 bg-white rounded-lg border border-dashed border-slate-300 text-center text-slate-400">
+                      <p>No line items added yet. Click "+ Add Item Line" to add products or raw materials.</p>
+                    </div>
+                  ) : (
+                    directBillItems.map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="grid grid-cols-12 gap-2 items-center bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs"
+                      >
+                        {/* Product Selection */}
+                        <div className="col-span-5">
+                          <select
+                            value={item.productId}
+                            onChange={(e) => handleUpdateDirectBillItem(idx, 'productId', e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded px-2 py-1.5 font-medium text-slate-900 truncate"
+                          >
+                            <option value="">Custom Item / Service</option>
+                            {products.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name} ({p.sku})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Quantity */}
+                        <div className="col-span-2">
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-slate-400">Qty:</span>
+                            <input
+                              type="number"
+                              min={1}
+                              value={item.quantity}
+                              onChange={(e) =>
+                                handleUpdateDirectBillItem(idx, 'quantity', Number(e.target.value))
+                              }
+                              className="w-full bg-slate-50 border border-slate-200 rounded px-1.5 py-1 text-right font-mono"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Unit Cost */}
+                        <div className="col-span-2">
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-slate-400">Cost:</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min={0}
+                              value={item.unitCost}
+                              onChange={(e) =>
+                                handleUpdateDirectBillItem(idx, 'unitCost', Number(e.target.value))
+                              }
+                              className="w-full bg-slate-50 border border-slate-200 rounded px-1.5 py-1 text-right font-mono"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Total with 5% VAT */}
+                        <div className="col-span-2 text-right">
+                          <span className="block font-mono font-bold text-slate-900">
+                            {formatAED(item.total)}
+                          </span>
+                          <span className="text-[9px] text-slate-400 font-mono">
+                            inc. 5% VAT
+                          </span>
+                        </div>
+
+                        {/* Remove */}
+                        <div className="col-span-1 text-center">
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveDirectBillItem(idx)}
+                            className="text-slate-400 hover:text-rose-600 transition p-1"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Calculation Summary */}
+                {directBillItems.length > 0 && (
+                  <div className="pt-2 border-t border-slate-200 flex justify-end">
+                    <div className="w-64 space-y-1 text-xs text-right">
+                      <div className="flex justify-between text-slate-500">
+                        <span>Net Subtotal:</span>
+                        <span className="font-mono font-semibold text-slate-800">
+                          {formatAED(
+                            directBillItems.reduce((s, i) => s + i.quantity * i.unitCost, 0)
+                          )}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-slate-500">
+                        <span>5% UAE Recoverable VAT:</span>
+                        <span className="font-mono font-semibold text-indigo-700">
+                          {formatAED(
+                            directBillItems.reduce((s, i) => s + i.vatAmount, 0)
+                          )}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-slate-900 font-bold pt-1 border-t border-slate-200">
+                        <span>Total Bill Payable:</span>
+                        <span className="font-mono text-sm font-black text-indigo-950">
+                          {formatAED(
+                            directBillItems.reduce((s, i) => s + i.total, 0)
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Inventory & Settlement Options */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={directBillForm.updateInventory}
+                    onChange={(e) =>
+                      setDirectBillForm({ ...directBillForm, updateInventory: e.target.checked })
+                    }
+                    className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <div>
+                    <span className="font-bold text-slate-900 block">
+                      Auto-Update Inventory & GRN Stock
+                    </span>
+                    <span className="text-[10px] text-slate-500 block">
+                      Instantly increases stock counts in {directBillForm.warehouseId === 'wh-1' ? 'DIP Central' : 'receiving warehouse'} and logs a Goods Received stock movement.
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={directBillForm.isPaid}
+                    onChange={(e) =>
+                      setDirectBillForm({ ...directBillForm, isPaid: e.target.checked })
+                    }
+                    className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <div>
+                    <span className="font-bold text-slate-900 block">
+                      Mark as Paid Immediately
+                    </span>
+                    <span className="text-[10px] text-slate-500 block">
+                      Mark this bill as settled right away via Cash or Corporate Bank Transfer.
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">Bill Notes / Description</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Direct purchase of kraft corrugated sheets for urgent packaging production"
+                  value={directBillForm.notes}
+                  onChange={(e) => setDirectBillForm({ ...directBillForm, notes: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                />
+              </div>
+
+              {/* Actions */}
+              <div className="pt-3 border-t border-slate-200 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowDirectBillModal(false)}
+                  className="px-4 py-2 border border-slate-300 rounded-xl font-medium text-slate-700 hover:bg-slate-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  id="btn-submit-direct-bill"
+                  disabled={isSubmittingDirectBill || directBillItems.length === 0}
+                  className="flex items-center gap-2 px-5 py-2 bg-indigo-700 hover:bg-indigo-600 text-white font-bold rounded-xl shadow-xs transition disabled:opacity-50"
+                >
+                  <Receipt className="w-4 h-4" />
+                  <span>
+                    {isSubmittingDirectBill ? 'Recording Purchase Bill...' : 'Record Direct Purchase Bill'}
+                  </span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Purchase Order Preview & Print Modal */}
+      {selectedPOForPreview && (
+        <PurchaseOrderModal
+          po={selectedPOForPreview}
+          onClose={() => setSelectedPOForPreview(null)}
+          onReceivePO={handleReceivePO}
+        />
       )}
     </div>
   );

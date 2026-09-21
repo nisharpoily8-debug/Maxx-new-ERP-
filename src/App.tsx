@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { ErpProvider, useErp } from './context/ErpContext.tsx';
 import { Header } from './components/Header.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
@@ -172,6 +173,7 @@ export default function App() {
   return (
     <ErpProvider>
       <MainLayout />
+      <SpeedInsights />
     </ErpProvider>
   );
 }

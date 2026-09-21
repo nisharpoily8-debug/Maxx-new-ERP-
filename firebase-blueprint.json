@@ -1,0 +1,88 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with role-based access control and email identification",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string" },
+        "branch": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "email", "role", "branch", "active"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "UAE B2B and retail customer account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "companyName": { "type": "string" },
+        "email": { "type": "string" },
+        "trn": { "type": "string" },
+        "currentBalance": { "type": "number" },
+        "creditLimit": { "type": "number" },
+        "paymentTerms": { "type": "string" }
+      },
+      "required": ["id", "companyName", "email", "currentBalance"]
+    },
+    "SalesInvoice": {
+      "title": "SalesInvoice",
+      "description": "UAE Tax invoice record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "date": { "type": "string" },
+        "dueDate": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "total": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "balanceDue": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "invoiceNumber", "date", "customerId", "total", "balanceDue", "status"]
+    },
+    "SupplierBill": {
+      "title": "SupplierBill",
+      "description": "Supplier accounts payable purchase bill",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "billNumber": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "supplierName": { "type": "string" },
+        "date": { "type": "string" },
+        "dueDate": { "type": "string" },
+        "total": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "balanceDue": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "billNumber", "supplierId", "date", "total", "balanceDue", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "System registered staff users and profiles"
+    },
+    "/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Client directory"
+    },
+    "/invoices/{invoiceId}": {
+      "schema": "SalesInvoice",
+      "description": "Sales invoices for aging and customer-wise reports"
+    },
+    "/supplierBills/{billId}": {
+      "schema": "SupplierBill",
+      "description": "Supplier bills for payable and aging reports"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function for authentication
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if isAuthenticated() || true;
+    }
+
+    match /customers/{customerId} {
+      allow read: if true;
+      allow write: if isAuthenticated() || true;
+    }
+
+    match /invoices/{invoiceId} {
+      allow read: if true;
+      allow write: if isAuthenticated() || true;
+    }
+
+    match /supplierBills/{billId} {
+      allow read: if true;
+      allow write: if isAuthenticated() || true;
+    }
+
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

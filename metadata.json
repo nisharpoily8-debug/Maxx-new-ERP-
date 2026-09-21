@@ -1,0 +1,8 @@
+{
+  "name": "Remix Maxpack UAE - Enterprise ERP",
+  "description": "Production-ready ERP system for Maxpack UAE featuring Sales, UAE FTA VAT Invoicing, Inventory, POS, Multi-Warehouse, Accounting, and Google Sheets integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
